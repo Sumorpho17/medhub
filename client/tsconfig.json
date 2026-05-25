@@ -1,0 +1,32 @@
+{
+    "extends": "../tsconfig.base.json",
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "lib": [
+            "ES2022",
+            "DOM",
+            "DOM.Iterable"
+        ],
+        "jsx": "react-jsx",
+        "outDir": "./dist",
+        "rootDir": "../",
+        "declaration": false,
+        "declarationMap": false,
+        "paths": {
+            "@medhub/shared": [
+                "../shared/src/index.ts"
+            ],
+            "@medhub/shared/*": [
+                "../shared/src/*.ts"
+            ]
+        }
+    },
+    "include": [
+        "src/**/*"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist"
+    ]
+}

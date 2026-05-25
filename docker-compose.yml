@@ -1,0 +1,58 @@
+# docker-compose.yml
+# ─────────────────────────────────────────────────────────────
+# FOR PRODUCTION / CI REFERENCE ONLY — not used for local dev
+# Local dev uses Supabase + Upstash + IBM Cloudant cloud tiers
+# See README.md for setup instructions
+# ─────────────────────────────────────────────────────────────
+
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: medhub
+      POSTGRES_USER: medhub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U medhub']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme}
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  couchdb:
+    image: couchdb:3.3
+    restart: unless-stopped
+    environment:
+      COUCHDB_USER: ${COUCHDB_ADMIN_USER:-admin}
+      COUCHDB_PASSWORD: ${COUCHDB_ADMIN_PASS:-changeme}
+    ports:
+      - '5984:5984'
+    volumes:
+      - couchdb_data:/opt/couchdb/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:5984/_up']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+  couchdb_data:

@@ -1,0 +1,222 @@
+// ═══════════════════════════════════════════════════════════
+// MEDHUB — Prisma Schema
+// ALL database changes via Prisma migrations only. No raw SQL.
+// RLS policies are in migration 0002_rls_policies.
+// ═══════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  RECEPTIONIST
+  DOCTOR
+  NURSE
+  PHARMACIST
+  LAB_TECH
+  BILLING_OFFICER
+  CLINIC_ADMIN
+  SUPER_ADMIN
+}
+
+enum SubscriptionTier {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIAL
+  GRACE_PERIOD
+  SUSPENDED
+  CANCELLED
+}
+
+enum AuditResult {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model Clinic {
+  id                   String             @id @default(uuid()) @db.Uuid
+  name                 String             @db.VarChar(120)
+  address              String             @db.VarChar(255)
+  phone                String             @db.VarChar(30)
+  registrationNumber   String?            @db.VarChar(50)
+  logo                 String?            @db.Text
+  subscriptionTier     SubscriptionTier   @default(STARTER)
+  subscriptionStatus   SubscriptionStatus @default(TRIAL)
+  subscriptionExpiresAt DateTime?
+  /// Cloudant database name (db_clinic_{id})
+  couchdbDatabaseName  String?            @db.VarChar(100)
+  /// Cloudant service account username (clinic_{id})
+  couchdbUser          String?            @db.VarChar(100)
+  /// Cloudant password encrypted with COUCHDB_CREDENTIAL_ENCRYPTION_KEY
+  couchdbPasswordEncrypted String?        @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  users        User[]
+  devices      Device[]
+  auditLogs    AuditLog[]
+  sessions     Session[]
+  refreshTokens RefreshToken[]
+
+  @@map("clinics")
+}
+
+model User {
+  id                  String   @id @default(uuid()) @db.Uuid
+  email               String   @unique @db.VarChar(255)
+  firstName           String   @db.VarChar(60)
+  lastName            String   @db.VarChar(60)
+  role                Role
+  passwordHash        String   @db.Text
+  /// TOTP secret encrypted at rest — null until MFA setup
+  mfaSecret           String?  @db.Text
+  mfaEnabled          Boolean  @default(false)
+  isActive            Boolean  @default(true)
+  failedLoginAttempts Int      @default(0)
+  lockedUntil         DateTime?
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  devices       Device[]
+  refreshTokens RefreshToken[]
+  sessions      Session[]
+  auditLogs     AuditLog[]
+
+  @@index([email])
+  @@index([clinicId])
+  @@map("users")
+}
+
+model Device {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String   @db.VarChar(100)
+  /// FingerprintJS visitorId — stable hardware/browser fingerprint
+  fingerprint  String   @db.VarChar(256)
+  isRegistered Boolean  @default(false)
+  isRevoked    Boolean  @default(false)
+  lastSyncAt   DateTime?
+  /// LSK encrypted with LSK_ENCRYPTION_KEY — returned decrypted in auth responses
+  encryptedLsk String   @db.Text
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A device fingerprint is unique per user within a clinic
+  refreshTokens RefreshToken[]
+  sessions      Session[]
+
+  @@unique([fingerprint, clinicId, userId])
+  @@index([clinicId])
+  @@index([userId])
+  @@map("devices")
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid()) @db.Uuid
+  /// bcrypt hash of the actual token — never stored in plaintext
+  tokenHash  String   @unique @db.Text
+  isRevoked  Boolean  @default(false)
+  expiresAt  DateTime
+
+  userId   String @db.Uuid
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deviceId String? @db.Uuid
+  device   Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([clinicId])
+  @@map("refresh_tokens")
+}
+
+model Session {
+  id             String   @id @default(uuid()) @db.Uuid
+  /// JWT ID claim — used for jti blocklist invalidation on logout
+  jti            String   @unique @db.VarChar(128)
+  lastActivityAt DateTime @default(now())
+  expiresAt      DateTime
+
+  userId   String @db.Uuid
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deviceId String? @db.Uuid
+  device   Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  clinicId String @db.Uuid
+  clinic   Clinic @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([clinicId])
+  @@index([jti])
+  @@map("sessions")
+}
+
+/// Append-only audit log — NO UPDATE or DELETE allowed on this table.
+/// Every entry is HMAC-SHA256 signed with AUDIT_HMAC_SECRET for tamper-evidence.
+/// Retention: auth events 2 years, patient access 7 years, security events 3 years.
+model AuditLog {
+  id            String      @id @default(uuid()) @db.Uuid
+  action        String      @db.VarChar(60)
+  resourceType  String?     @db.VarChar(60)
+  resourceId    String?     @db.Uuid
+  result        AuditResult
+  ipAddress     String      @db.VarChar(45)  // IPv4 or IPv6
+  userAgent     String?     @db.Text
+  /// HMAC-SHA256 signature — verify: HMAC(AUDIT_HMAC_SECRET, {userId+action+resourceId+clinicId+timestamp})
+  hmacSignature String      @db.VarChar(64)
+  /// Original event timestamp — may differ from createdAt for offline-queued events
+  timestamp     DateTime
+  /// When this log entry was persisted — set at server receipt time
+  createdAt     DateTime    @default(now())
+  /// null for offline events until they sync
+  syncedAt      DateTime?
+
+  userId   String? @db.Uuid
+  user     User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  clinicId String? @db.Uuid
+  clinic   Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+
+  deviceId String? @db.Uuid
+  // Note: no Device relation — device may be revoked/deleted after event
+
+  @@index([clinicId, timestamp])
+  @@index([userId, timestamp])
+  @@index([action])
+  @@map("audit_logs")
+}
