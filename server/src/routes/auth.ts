@@ -18,6 +18,7 @@ import {
     enableMfa,
     refreshAccessToken,
     logout,
+    logoutAll,
 } from '../services/auth.service.js';
 import {
     RegisterClinicSchema,
@@ -72,7 +73,7 @@ router.post(
             }
 
             // Set refresh token as HttpOnly secure cookie
-            res.cookie('refreshToken', result.accessToken, {
+            res.cookie('refreshToken', result.rawRefreshToken, {
                 httpOnly: true,
                 secure: env.NODE_ENV === 'production',
                 sameSite: 'strict',
@@ -99,11 +100,11 @@ router.post(
     authenticate,
     async (req: Request, res: Response, next: NextFunction) => {
         try {
-            const { otpAuthUrl, base32Secret } = await initiateMfaSetup(
+            const { otpAuthUrl } = await initiateMfaSetup(
                 req.user!.sub,
                 req.user!.clinicId,
             );
-            res.json({ otpAuthUrl, base32Secret });
+            res.json({ otpAuthUrl });
         } catch (err) {
             next(err);
         }
@@ -150,6 +151,27 @@ router.post(
             );
 
             res.json({ accessToken, lsk });
+        } catch (err) {
+            next(err);
+        }
+    },
+);
+
+// ─── POST /logout-all ─────────────────────────────────────────────────────────
+
+router.post(
+    '/logout-all',
+    authenticate,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            await logoutAll(
+                req.user!.sub,
+                req.user!.clinicId,
+                getIp(req),
+                req.headers['user-agent'] ?? null,
+            );
+            res.clearCookie('refreshToken', { path: '/api/v1/auth/refresh' });
+            res.json({ message: 'All sessions revoked successfully' });
         } catch (err) {
             next(err);
         }

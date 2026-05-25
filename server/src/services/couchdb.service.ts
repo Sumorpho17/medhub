@@ -8,10 +8,17 @@
 // ═══════════════════════════════════════════════════════════
 
 import crypto from 'crypto';
+import https from 'https';
+import fetch from 'node-fetch';
 import { env } from '../config/env.js';
 import prisma from '../lib/prismaClinicScope.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { getClinicDbName, getClinicDbUser } from '@medhub/shared';
+
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: true,
+    keepAlive: true,
+});
 
 const COUCH_BASE_URL = env.COUCHDB_URL;
 const COUCH_AUTH = `Basic ${Buffer.from(
@@ -33,13 +40,29 @@ async function couchRequest(
     if (body !== undefined) {
         options.body = JSON.stringify(body);
     }
-    const res = await fetch(`${COUCH_BASE_URL}${path}`, options);
-
+    const isHttps = COUCH_BASE_URL.startsWith('https://');
+    const res = await fetch(`${COUCH_BASE_URL}${path}`, {
+        ...options,
+        agent: isHttps ? httpsAgent : undefined,
+    } as any);
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
 }
 
 // ─── Encrypt CouchDB Password ─────────────────────────────────────────────────
+
+function decryptCouchPassword(encrypted: string): string {
+    const [ivHex, dataHex] = encrypted.split(':');
+    if (!ivHex || !dataHex) throw new Error('Invalid encrypted CouchDB password');
+    const key = Buffer.from(env.COUCHDB_CREDENTIAL_ENCRYPTION_KEY, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    const decrypted = Buffer.concat([
+        decipher.update(Buffer.from(dataHex, 'hex')),
+        decipher.final(),
+    ]);
+    return decrypted.toString('utf8');
+}
 
 function encryptCouchPassword(password: string): string {
     const key = Buffer.from(env.COUCHDB_CREDENTIAL_ENCRYPTION_KEY, 'hex');
@@ -61,6 +84,8 @@ function encryptCouchPassword(password: string): string {
  * ⚠ If Cloudant Lite restricts _users writes, implement the API key fallback
  *   and set couchdbUser + couchdbPasswordEncrypted to the API key details instead.
  */
+export { decryptCouchPassword };
+
 export async function provisionClinicDatabase(clinicId: string): Promise<void> {
     const dbName = getClinicDbName(clinicId);
     const dbUser = getClinicDbUser(clinicId);

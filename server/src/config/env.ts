@@ -67,6 +67,7 @@ const EnvSchema = z.object({
     // Encryption keys — deliberately separate
     COUCHDB_CREDENTIAL_ENCRYPTION_KEY: z.string().length(64, 'Must be a 32-byte hex string (64 hex chars)'),
     LSK_ENCRYPTION_KEY: z.string().length(64, 'Must be a 32-byte hex string (64 hex chars)'),
+    MFA_ENCRYPTION_KEY: z.string().length(64, 'Must be a 32-byte hex string (64 hex chars)'),
 });
 
 function validateEnv() {

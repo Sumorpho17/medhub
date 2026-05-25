@@ -9,7 +9,7 @@ import { env } from '../config/env.js';
 
 const redis = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: null, // Required by BullMQ
-    enableReadyCheck: false,   // Upstash specific
+    enableReadyCheck: true,
     lazyConnect: false,
 });
 

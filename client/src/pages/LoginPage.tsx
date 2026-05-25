@@ -57,6 +57,9 @@ export default function LoginPage() {
                 user: AuthUser;
                 permissions?: string[];
                 lsk?: string;
+                couchDbUrl: string;
+                couchDbUser: string;
+                couchDbPassword: string;
             }>('/auth/login', data, true);
 
             if (res.requiresMfa) {
@@ -71,9 +74,9 @@ export default function LoginPage() {
                 res.permissions!,
                 res.accessToken!,
                 res.lsk!,
-                'http://localhost:5984', // Dev couch url (would be via env in prod)
-                'org.couchdb.user:clinic_' + res.user!.clinicId,
-                'dev-password' // Should be fetched from server securely — but for Phase 0 we stub this
+                res.couchDbUrl,
+                res.couchDbUser,
+                res.couchDbPassword,
             );
 
             navigate('/dashboard', { replace: true });

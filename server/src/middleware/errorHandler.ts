@@ -33,7 +33,9 @@ export const errorHandler: ErrorRequestHandler = (
         res.status(400).json({
             error: 'Validation failed',
             code: 'VALIDATION_ERROR',
-            fields: err.flatten().fieldErrors,
+            ...(env.NODE_ENV === 'development' && {
+                fields: err.flatten().fieldErrors,
+            }),
         });
         return;
     }

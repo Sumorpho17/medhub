@@ -1,11 +1,19 @@
 // ═══════════════════════════════════════════════════════════
 // MEDHUB — Rate Limiter Middleware
 // Tiered limits: strict on auth endpoints, more relaxed elsewhere.
-// Uses in-memory store for development; swap to RedisStore for production.
+// Uses Redis-backed store for consistent limits across instances.
 // ═══════════════════════════════════════════════════════════
 
 import rateLimit from 'express-rate-limit';
 import slowDown from 'express-slow-down';
+import type { RedisReply } from 'rate-limit-redis';
+import { RedisStore } from 'rate-limit-redis';
+import redis from '../lib/redis.js';
+
+const store = new RedisStore({
+    sendCommand: (...args: string[]) =>
+        redis.call(args[0]!, ...args.slice(1) as (string | number | Buffer)[]) as Promise<RedisReply>,
+});
 
 /** Auth endpoints: 5 attempts per 15 minutes */
 export const authLimiter = rateLimit({
@@ -13,11 +21,11 @@ export const authLimiter = rateLimit({
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
+    store,
     message: {
         error: 'Too many login attempts. Please wait 15 minutes before trying again.',
         code: 'RATE_LIMIT_EXCEEDED',
     },
-    skipSuccessfulRequests: true, // Only count failed requests
 });
 
 /** Slow down before hard limit on auth: adds 500ms delay after 3 attempts */
@@ -33,6 +41,7 @@ export const generalLimiter = rateLimit({
     max: 100,
     standardHeaders: true,
     legacyHeaders: false,
+    store,
     message: {
         error: 'Too many requests. Please slow down.',
         code: 'RATE_LIMIT_EXCEEDED',
@@ -45,6 +54,7 @@ export const registrationLimiter = rateLimit({
     max: 3,
     standardHeaders: true,
     legacyHeaders: false,
+    store,
     message: {
         error: 'Too many registration attempts.',
         code: 'RATE_LIMIT_EXCEEDED',

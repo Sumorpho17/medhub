@@ -14,6 +14,7 @@ import prisma, { withClinicScope } from '../lib/prismaClinicScope.js';
 import { env } from '../config/env.js';
 import { auditLog } from './audit.service.js';
 import { assertPasswordNotBreached } from './hibp.service.js';
+import { decryptCouchPassword } from './couchdb.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { blockJti } from '../lib/redis.js';
 import {
@@ -39,20 +40,20 @@ function generateRefreshToken(): string {
     return crypto.randomBytes(64).toString('hex');
 }
 
-// ─── LSK Encryption / Decryption ─────────────────────────────────────────────
+// ─── Encryption / Decryption ───────────────────────────────────────────────
 
-function encryptLsk(plaintextLsk: string): string {
-    const key = Buffer.from(env.LSK_ENCRYPTION_KEY, 'hex');
+function encryptWith(keyHex: string, plaintext: string): string {
+    const key = Buffer.from(keyHex, 'hex');
     const iv = crypto.randomBytes(16);
     const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-    const encrypted = Buffer.concat([cipher.update(plaintextLsk, 'utf8'), cipher.final()]);
+    const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
-export function decryptLsk(encryptedLsk: string): string {
-    const [ivHex, dataHex] = encryptedLsk.split(':');
-    if (!ivHex || !dataHex) throw new Error('Invalid LSK format');
-    const key = Buffer.from(env.LSK_ENCRYPTION_KEY, 'hex');
+function decryptWith(keyHex: string, encrypted: string): string {
+    const [ivHex, dataHex] = encrypted.split(':');
+    if (!ivHex || !dataHex) throw new Error('Invalid encrypted data format');
+    const key = Buffer.from(keyHex, 'hex');
     const iv = Buffer.from(ivHex, 'hex');
     const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
     const decrypted = Buffer.concat([
@@ -60,6 +61,22 @@ export function decryptLsk(encryptedLsk: string): string {
         decipher.final(),
     ]);
     return decrypted.toString('utf8');
+}
+
+function encryptLsk(plaintext: string): string {
+    return encryptWith(env.LSK_ENCRYPTION_KEY, plaintext);
+}
+
+export function decryptLsk(encrypted: string): string {
+    return decryptWith(env.LSK_ENCRYPTION_KEY, encrypted);
+}
+
+function encryptMfaSecret(plaintext: string): string {
+    return encryptWith(env.MFA_ENCRYPTION_KEY, plaintext);
+}
+
+function decryptMfaSecret(encrypted: string): string {
+    return decryptWith(env.MFA_ENCRYPTION_KEY, encrypted);
 }
 
 // ─── Register Clinic  ─────────────────────────────────────────────────────────
@@ -123,9 +140,13 @@ export async function login(
     userAgent: string | null,
 ): Promise<{
     accessToken: string;
+    rawRefreshToken: string;
     user: { id: string; email: string; firstName: string; lastName: string; role: Role; clinicId: string; mfaEnabled: boolean };
     permissions: string[];
     lsk: string;
+    couchDbUrl: string;
+    couchDbUser: string;
+    couchDbPassword: string;
     requiresMfa?: boolean;
 }> {
     // Find user by email (no RLS needed — email is unique across all tenants)
@@ -159,7 +180,7 @@ export async function login(
     }
 
     // Constant-time password check (prevents timing attacks)
-    const dummyHash = '$2b$12$invalidhashfortimingprotection000000000000000000000000';
+    const dummyHash = '$2b$12$Vhkw1w1OwK3L1oZ7B9JYWu2yLHiJDCbJg75NAZ40fRUVzyxa9RFR.';
     const passwordMatch = await bcrypt.compare(
         input.password,
         user?.passwordHash ?? dummyHash,
@@ -196,9 +217,13 @@ export async function login(
         await auditLog({ ...baseAuditFields, action: AuditAction.LOGIN_SUCCESS, result: 'SUCCESS' });
         return {
             accessToken: '',
+            rawRefreshToken: '',
             user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role as Role, clinicId: user.clinicId, mfaEnabled: true },
             permissions: [],
             lsk: '',
+            couchDbUrl: '',
+            couchDbUser: '',
+            couchDbPassword: '',
             requiresMfa: true,
         };
     }
@@ -237,8 +262,13 @@ export async function login(
         result: 'SUCCESS',
     });
 
+    const couchDbPassword = user.clinic.couchdbPasswordEncrypted
+        ? decryptCouchPassword(user.clinic.couchdbPasswordEncrypted)
+        : '';
+
     return {
         accessToken,
+        rawRefreshToken,
         user: {
             id: user.id,
             email: user.email,
@@ -250,6 +280,9 @@ export async function login(
         },
         permissions: ROLE_PERMISSIONS[user.role as Role] as unknown as string[],
         lsk,
+        couchDbUrl: env.COUCHDB_URL,
+        couchDbUser: user.clinic.couchdbUser ?? '',
+        couchDbPassword,
     };
 }
 
@@ -258,7 +291,7 @@ export async function login(
 export async function initiateMfaSetup(
     userId: string,
     clinicId: string,
-): Promise<{ otpAuthUrl: string; base32Secret: string }> {
+): Promise<{ otpAuthUrl: string }> {
     const user = (await withClinicScope(clinicId, (tx) =>
         tx.user.findUniqueOrThrow({ where: { id: userId } }),
     )) as any;
@@ -269,8 +302,7 @@ export async function initiateMfaSetup(
         length: 32,
     });
 
-    // Store encrypted secret (not yet enabled — enabled after first verify)
-    const encryptedSecret = encryptLsk(secret.base32); // Reuse AES helper
+    const encryptedSecret = encryptMfaSecret(secret.base32);
     await withClinicScope(clinicId, (tx) =>
         tx.user.update({
             where: { id: userId },
@@ -280,7 +312,6 @@ export async function initiateMfaSetup(
 
     return {
         otpAuthUrl: secret.otpauth_url ?? '',
-        base32Secret: secret.base32,
     };
 }
 
@@ -298,7 +329,7 @@ export async function enableMfa(
         throw new AppError(400, 'MFA_NOT_INITIATED', 'MFA setup not started');
     }
 
-    const base32Secret = decryptLsk(user.mfaSecret);
+    const base32Secret = decryptMfaSecret(user.mfaSecret);
     const isValid = speakeasy.totp.verify({
         secret: base32Secret,
         encoding: 'base32',
@@ -405,8 +436,38 @@ export async function logout(
     ipAddress: string,
     userAgent: string | null,
 ): Promise<void> {
-    // Block jti until natural expiry
     await blockJti(jti, jtiTtlSeconds);
+    await auditLog({
+        userId, role: null, deviceId: null, clinicId,
+        action: AuditAction.LOGOUT, resourceType: 'User', resourceId: userId,
+        result: 'SUCCESS', ipAddress, userAgent, timestamp: new Date().toISOString(),
+    });
+}
+
+export async function logoutAll(
+    userId: string,
+    clinicId: string,
+    ipAddress: string,
+    userAgent: string | null,
+): Promise<void> {
+    const activeSessions = await withClinicScope(clinicId, (tx) =>
+        tx.session.findMany({
+            where: { userId, expiresAt: { gt: new Date() } },
+        }),
+    ) as any[];
+
+    const now = Date.now();
+    for (const session of activeSessions) {
+        const ttl = Math.max(0, Math.floor(session.expiresAt.getTime() - now) / 1000);
+        await blockJti(session.jti, ttl);
+    }
+
+    await withClinicScope(clinicId, (tx) =>
+        tx.refreshToken.updateMany({
+            where: { userId, isRevoked: false },
+            data: { isRevoked: true },
+        }),
+    );
 
     await auditLog({
         userId, role: null, deviceId: null, clinicId,

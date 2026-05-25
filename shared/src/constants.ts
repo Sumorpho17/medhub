@@ -86,4 +86,4 @@ export const SUBSCRIPTION_TIERS = {
 // ─── UI ───────────────────────────────────────────────────────────────────────
 
 /** PBKDF2 iterations for PouchDB encryption key derivation (Web Crypto) */
-export const PBKDF2_ITERATIONS = 100_000;
+export const PBKDF2_ITERATIONS = 600_000;

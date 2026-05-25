@@ -43,7 +43,7 @@ export function startAuditWorker(): Worker {
                     timestamp: new Date(event.timestamp),
                     userId: event.userId ?? null,
                     clinicId: event.clinicId ?? null,
-                    // deviceId is stored by audit.service — not part of AuditEventInput yet
+                    deviceId: event.deviceId ?? null,
                     syncedAt: new Date(),
                 },
             });
