@@ -13,8 +13,12 @@ import { generalLimiter } from './middleware/rateLimiter.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { startAuditWorker } from './workers/auditWorker.js';
 
-// Route imports (added as steps complete)
+// Route imports
 import authRouter from './routes/auth.js';
+import patientsRouter from './routes/patients.js';
+import staffRouter from './routes/staff.js';
+import billingRouter from './routes/billing.js';
+import clinicRouter from './routes/clinic.js';
 
 const app = express();
 
@@ -38,6 +42,10 @@ app.get('/health', (_req, res) => {
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/patients', patientsRouter);
+app.use('/api/v1/staff', staffRouter);
+app.use('/api/v1/billing', billingRouter);
+app.use('/api/v1/clinic', clinicRouter);
 
 // ─── 404 + Error Handlers (must be last) ─────────────────────────────────────
 app.use(notFoundHandler);

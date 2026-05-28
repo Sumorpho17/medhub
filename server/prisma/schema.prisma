@@ -186,6 +186,25 @@ model Session {
   @@map("sessions")
 }
 
+/// Staff invites — generated invite links for clinic staff onboarding.
+model StaffInvite {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String   @db.VarChar(255)
+  firstName String   @db.VarChar(60)
+  lastName  String   @db.VarChar(60)
+  role      Role
+  /// Cryptographically random token used in the invite URL
+  token     String   @unique @db.VarChar(128)
+  expiresAt DateTime
+  clinicId  String   @db.Uuid
+  accepted  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([clinicId])
+  @@index([token])
+  @@map("staff_invites")
+}
+
 /// Append-only audit log — NO UPDATE or DELETE allowed on this table.
 /// Every entry is HMAC-SHA256 signed with AUDIT_HMAC_SECRET for tamper-evidence.
 /// Retention: auth events 2 years, patient access 7 years, security events 3 years.

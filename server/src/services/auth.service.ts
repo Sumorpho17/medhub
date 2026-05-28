@@ -63,7 +63,7 @@ function decryptWith(keyHex: string, encrypted: string): string {
     return decrypted.toString('utf8');
 }
 
-function encryptLsk(plaintext: string): string {
+export function encryptLsk(plaintext: string): string {
     return encryptWith(env.LSK_ENCRYPTION_KEY, plaintext);
 }
 
@@ -75,7 +75,7 @@ function encryptMfaSecret(plaintext: string): string {
     return encryptWith(env.MFA_ENCRYPTION_KEY, plaintext);
 }
 
-function decryptMfaSecret(encrypted: string): string {
+export function decryptMfaSecret(encrypted: string): string {
     return decryptWith(env.MFA_ENCRYPTION_KEY, encrypted);
 }
 
